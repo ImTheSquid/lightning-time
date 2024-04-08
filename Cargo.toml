@@ -1,6 +1,6 @@
 [package]
 name = "lightning-time"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ImTheSquid/lightning-time"
@@ -9,9 +9,14 @@ description = "Lightning Time in Rust"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["std"]
+std = ["dep:regex", "palette/default"]
+
 [dependencies]
-chrono = "0.4.31"
-hex = "0.4.3"
-prisma = "0.1.1"
-regex = "1.10.2"
-thiserror = "1.0.50"
+chrono = { version = "0.4.31", default-features = false }
+hex = { version = "0.4.3", default-features = false }
+libm = "0.2.8"
+palette = { version = "0.7.5", default-features = false, features = ["libm"] }
+regex = { version = "1.10.2", optional = true }
+thiserror-no-std = "2.0.2"
