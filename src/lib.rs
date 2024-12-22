@@ -9,14 +9,29 @@ use regex::Regex;
 use thiserror_no_std::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LightningTimeColorConfig {
+    pub bolt: LightningBaseColors,
+    pub zap: LightningBaseColors,
+    pub spark: LightningBaseColors,
+}
+
+impl Default for LightningTimeColorConfig {
+    fn default() -> Self {
+        Self {
+            bolt: LightningBaseColors(161, 0),
+            zap: LightningBaseColors(50, 214),
+            spark: LightningBaseColors(246, 133),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LightningTime {
     pub bolts: u8,
-    pub bolt_colors: LightningBaseColors,
     pub zaps: u8,
-    pub zap_colors: LightningBaseColors,
     pub sparks: u8,
-    pub spark_colors: LightningBaseColors,
     pub charges: u8,
+    pub subcharges: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,20 +42,6 @@ pub struct LightningTimeColors {
     pub bolt: palette::Srgb<u8>,
     pub zap: palette::Srgb<u8>,
     pub spark: palette::Srgb<u8>,
-}
-
-impl Default for LightningTime {
-    fn default() -> Self {
-        Self {
-            bolts: 0,
-            bolt_colors: LightningBaseColors(161, 0),
-            zaps: 0,
-            zap_colors: LightningBaseColors(50, 214),
-            sparks: 0,
-            spark_colors: LightningBaseColors(246, 133),
-            charges: 0,
-        }
-    }
 }
 
 impl LightningTime {
@@ -54,21 +55,13 @@ impl LightningTime {
         }
     }
 
-    pub fn colors(&self) -> LightningTimeColors {
+    pub fn colors(&self, config: &LightningTimeColorConfig) -> LightningTimeColors {
         LightningTimeColors {
-            bolt: palette::Srgb::new(
-                self.bolts * 16 + self.zaps,
-                self.bolt_colors.0,
-                self.bolt_colors.1,
-            ),
-            zap: palette::Srgb::new(
-                self.zap_colors.0,
-                self.zaps * 16 + self.sparks,
-                self.zap_colors.1,
-            ),
+            bolt: palette::Srgb::new(self.bolts * 16 + self.zaps, config.bolt.0, config.bolt.1),
+            zap: palette::Srgb::new(config.zap.0, self.zaps * 16 + self.sparks, config.zap.1),
             spark: palette::Srgb::new(
-                self.spark_colors.0,
-                self.spark_colors.1,
+                config.spark.0,
+                config.spark.1,
                 self.sparks * 16 + self.charges,
             ),
         }
@@ -78,9 +71,13 @@ impl LightningTime {
     pub fn to_stripped_string(&self) -> String {
         format!("{:x}~{:x}~{:x}", self.bolts, self.zaps, self.sparks)
     }
+
+    pub fn now() -> Self {
+        Self::from(chrono::offset::Local::now().naive_local().time())
+    }
 }
 
-const MILLIS_PER_CHARGE: f64 = 86_400_000.0 / 65_536.0; // Div by 16^4
+const MILLIS_PER_SUBCHARGE: f64 = 86_400_000.0 / 1048576.0; // Div by 16^5
 
 impl From<NaiveTime> for LightningTime {
     fn from(value: NaiveTime) -> Self {
@@ -89,7 +86,8 @@ impl From<NaiveTime> for LightningTime {
             + 1_000. * value.second() as f64
             + value.nanosecond() as f64 / 1.0e6;
 
-        let total_charges = millis / MILLIS_PER_CHARGE;
+        let total_subcharges = millis / MILLIS_PER_SUBCHARGE;
+        let total_charges = total_subcharges / 16.;
         let total_sparks = total_charges / 16.;
         let total_zaps = total_sparks / 16.;
         let total_bolts = total_zaps / 16.;
@@ -101,7 +99,7 @@ impl From<NaiveTime> for LightningTime {
                 sparks: (total_sparks.floor() % 16.) as u8,
                 zaps: (total_zaps.floor() % 16.) as u8,
                 charges: (total_charges.floor() % 16.) as u8,
-                ..Default::default()
+                subcharges: (total_subcharges.floor() % 16.) as u8,
             }
         }
 
@@ -113,7 +111,7 @@ impl From<NaiveTime> for LightningTime {
                 sparks: (floor(total_sparks) % 16.) as u8,
                 zaps: (floor(total_zaps) % 16.) as u8,
                 charges: (floor(total_charges) % 16.) as u8,
-                ..Default::default()
+                subcharges: (floor(total_subcharges) % 16.) as u8,
             }
         }
     }
@@ -128,13 +126,13 @@ impl FromStr for LightningTime {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let re = RE.get_or_init(|| {
-            Regex::new(r"(?P<bolt>[[:xdigit:]])~(?P<spark>[[:xdigit:]])~(?P<zap>[[:xdigit:]])(?:\|(?P<charge>[[:xdigit:]]))?").unwrap()
+            Regex::new(r"(?P<bolt>[[:xdigit:]])~(?P<spark>[[:xdigit:]])~(?P<zap>[[:xdigit:]])(?:\|(?P<charge>[[:xdigit:]])(?P<subcharge>[[:xdigit:]])?)?").unwrap()
         });
 
         let caps = re.captures(s);
         match caps {
             Some(caps) => {
-                if caps.len() < 4 {
+                if caps.len() < 3 {
                     return Err(Error::InvalidConversion);
                 }
                 Ok(LightningTime {
@@ -145,7 +143,10 @@ impl FromStr for LightningTime {
                         .name("charge")
                         .map(|c| u8::from_str_radix(c.as_str(), 16).unwrap())
                         .unwrap_or(0),
-                    ..Default::default()
+                    subcharges: caps
+                        .name("subcharge")
+                        .map(|c| u8::from_str_radix(c.as_str(), 16).unwrap())
+                        .unwrap_or(0),
                 })
             }
             None => Err(Error::InvalidConversion),
@@ -156,8 +157,8 @@ impl FromStr for LightningTime {
 impl core::fmt::Display for LightningTime {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!(
-            "{:x}~{:x}~{:x}|{:x}",
-            self.bolts, self.zaps, self.sparks, self.charges
+            "{:x}~{:x}~{:x}|{:x}{:x}",
+            self.bolts, self.zaps, self.sparks, self.charges, self.subcharges
         ))
     }
 }
@@ -168,15 +169,15 @@ pub enum Error {
     InvalidConversion,
 }
 
-impl TryInto<NaiveTime> for LightningTime {
-    type Error = Error;
-
-    fn try_into(self) -> Result<NaiveTime, Self::Error> {
+impl From<LightningTime> for NaiveTime {
+    fn from(value: LightningTime) -> Self {
         let elapsed: usize =
-            ((self.bolts as usize * 16 + self.zaps as usize) * 16 + self.sparks as usize) * 16
-                + self.charges as usize;
+            (((value.bolts as usize * 16 + value.zaps as usize) * 16 + value.sparks as usize) * 16
+                + value.charges as usize)
+                * 16
+                + value.subcharges as usize;
 
-        let millis = elapsed as f64 * MILLIS_PER_CHARGE;
+        let millis = elapsed as f64 * MILLIS_PER_SUBCHARGE;
 
         let seconds = millis / 1000.;
         let leftover_millis = millis % 1000.;
@@ -185,18 +186,16 @@ impl TryInto<NaiveTime> for LightningTime {
             seconds as u32,
             (leftover_millis * 1.0e6) as u32,
         )
-        .ok_or(Error::InvalidConversion)
+        .expect("Lightning Time to never overflow")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use chrono::{NaiveTime, Timelike};
     use palette::Srgb;
 
-    use crate::{Error, LightningTime, LightningTimeColors};
+    use crate::{LightningTime, LightningTimeColors};
 
     #[test]
     fn convert_to_lightning() {
@@ -210,10 +209,13 @@ mod tests {
             }
         );
 
-        assert_eq!(lightning.to_string(), "8~0~0|0");
-        assert_eq!(lightning.to_stripped_string(), "8~0~0");
+        #[cfg(feature = "std")]
+        {
+            assert_eq!(lightning.to_string(), "8~0~0|00");
+            assert_eq!(lightning.to_stripped_string(), "8~0~0");
+        }
         assert_eq!(
-            lightning.colors(),
+            lightning.colors(&Default::default()),
             LightningTimeColors {
                 bolt: Srgb::new(0x80, 0xa1, 0x00),
                 zap: Srgb::new(0x32, 0x00, 0xd6),
@@ -223,7 +225,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn parse() {
+        use std::str::FromStr;
+        assert!(LightningTime::from_str("f~3~a|8c").is_ok());
         assert!(LightningTime::from_str("f~3~a|8").is_ok());
         assert!(LightningTime::from_str("f~3~a").is_ok());
         assert!(LightningTime::from_str("f~~|").is_err());
@@ -236,10 +241,9 @@ mod tests {
             ..Default::default()
         };
 
-        let naive: Result<NaiveTime, Error> = lightning.try_into();
+        let naive: NaiveTime = lightning.into();
 
-        assert!(naive.is_ok());
-        assert_eq!(naive.unwrap(), NaiveTime::from_hms_opt(12, 0, 0).unwrap());
+        assert_eq!(naive, NaiveTime::from_hms_opt(12, 0, 0).unwrap());
 
         let lightning = LightningTime {
             bolts: 0x8,
@@ -247,12 +251,11 @@ mod tests {
             ..Default::default()
         };
 
-        let naive: Result<NaiveTime, Error> = lightning.try_into();
+        let naive: NaiveTime = lightning.into();
 
-        assert!(naive.is_ok());
         // Floating point is not fun
         assert_eq!(
-            naive.unwrap().second(),
+            naive.second(),
             NaiveTime::from_hms_opt(12, 0, 13).unwrap().second()
         );
     }
